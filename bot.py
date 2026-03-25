@@ -33,7 +33,11 @@ if not all([GEMINI_API_KEY, OPENROUTER_API_KEY, TELEGRAM_TOKEN]):
 
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, force=True)
-print(f"✅ Bot Başlatıldı. Gemini: {bool(GEMINI_API_KEY)}, OpenRouter: {bool(OPENROUTER_API_KEY)}")
+
+def mask_key(key): return f"{key[:6]}...{key[-4:]}" if key else "EKSİK"
+print(f"✅ Bot Başlatıldı.")
+print(f"🔑 Gemini Key: {mask_key(GEMINI_API_KEY)}")
+print(f"🔑 OpenRouter Key: {mask_key(OPENROUTER_API_KEY)}")
 
 # --- 2. DURUMLAR VE HAFIZA ---
 SINAV, BRANS, HEDEF, NET, ZAYIF, SAAT = range(6)
