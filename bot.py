@@ -73,7 +73,9 @@ async def model_kesfi():
                 data = resp.json().get('data', [])
                 discovered = [m['id'] for m in data if ':free' in m['id']]
                 if discovered: ACTIVE_FREE_MODELS = discovered
-    except: pass
+    except Exception as e:
+        logging.error(f"❌ Model keşfi hatası: {e}")
+    logging.info(f"✅ Aktif ücretsiz modeller: {ACTIVE_FREE_MODELS}")
 
 # --- 4. VERİ VE MESAJ YÖNETİMİ ---
 async def veri_yukle():
@@ -114,7 +116,9 @@ async def openrouter_call(prompt, mode="info"):
             async with httpx.AsyncClient() as client:
                 resp = await client.post(url, headers=headers, json=payload, timeout=60.0)
                 if resp.status_code == 200:
-                    return resp.json()['choices'][0]['message']['content'].strip()
+                    content = resp.json()['choices'][0]['message']['content'].strip()
+                    logging.info(f"✅ OpenRouter ({model_id}) Başarılı")
+                    return content
                 else:
                     logging.error(f"OpenRouter Error ({model_id}): {resp.status_code} - {resp.text}")
         except Exception as e:
@@ -124,16 +128,18 @@ async def openrouter_call(prompt, mode="info"):
 
 async def hybrid_engine(prompt, mode="info"):
     try:
+        logging.info(f"🚀 Gemini denemesi başlatılıyor (Mod: {mode})...")
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, lambda: client_gemini.models.generate_content(
             model="gemini-1.5-flash", contents=f"TALİMAT: {mode}\nİSTEK: {prompt}"
         ))
         if response and response.text:
+            logging.info("✅ Gemini başarılı.")
             return response.text.strip()
         else:
-            raise Exception("Empty Gemini response")
+            raise Exception("Boş Gemini yanıtı")
     except Exception as e:
-        logging.error(f"Gemini Engine Error: {e}")
+        logging.warning(f"⚠️ Gemini Hatası: {e}. OpenRouter deneniyor...")
         return await openrouter_call(prompt, mode)
 
 # --- 6. ONBOARDING (AWAIT HATASI ÇÖZÜLDÜ) ---
@@ -381,8 +387,10 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"**Bağlantı Testleri:**\n"
         f"{gemini_res}\n"
         f"{or_res}\n\n"
+        f"**Aktif Modeller:**\n`{ACTIVE_FREE_MODELS[:3]}...`\n\n"
         f"💡 *Not:* Eğer anahtarlar 'EKSİK' görünüyorsa Render Dashboard üzerinden eklemelisin."
     )
+    logging.info(f"🔍 DEBUG SONUCU:\n{final_text}")
     await msg.edit_text(final_text, parse_mode='Markdown')
 
 # --- 8. MAIN ---
