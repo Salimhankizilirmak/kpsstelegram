@@ -1,6 +1,6 @@
+google-generativeai
 python-telegram-bot
-google-genai
 gTTS
 pytz
 httpx
-python-dotenv
+python-dotenv
