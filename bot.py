@@ -240,31 +240,56 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ AI şu an çok yoğun. Lütfen 30 saniye sonra tekrar deneyin.")
             return
 
-        try:
-            # JSON temizleme ve iyileştirme
-            raw_clean = raw.replace("```json", "").replace("```", "").strip()
+        def extract_json(text):
+            """AI yanıtından JSON listesini veya objesini çıkarır ve liste olarak döndürür."""
+            text = text.replace("```json", "").replace("```", "").strip()
             
-            # Kesilme onarımı: Eğer JSON liste kapanmamışsa, son tam objeden sonra kapat
-            if raw_clean.startswith('[') and not raw_clean.endswith(']'):
-                last_brace = raw_clean.rfind('}')
-                if last_brace != -1:
-                    raw_clean = raw_clean[:last_brace+1] + ']'
-                    logging.info("⚠️ JSON kesilmiş bulundu, onarıldı.")
+            # Başlangıç karakterlerini bul
+            start_list = text.find('[')
+            start_obj = text.find('{')
+            
+            if start_list == -1 and start_obj == -1:
+                return None
+            
+            # Hangisi önce başlıyorsa onu temel al
+            if start_list != -1 and (start_obj == -1 or start_list < start_obj):
+                end_list = text.rfind(']')
+                candidate = text[start_list:end_list+1] if end_list != -1 else text[start_list:]
+            else:
+                end_obj = text.rfind('}')
+                candidate = text[start_obj:end_obj+1] if end_obj != -1 else text[start_obj:]
+                if not candidate.startswith('['): candidate = "[" + candidate + "]"
 
-            json_match = re.search(r'\[.*\]', raw_clean, re.DOTALL)
-            if not json_match:
-                raise ValueError("JSON listesi ([...]) bulunamadı")
+            # Kesilme onarımı
+            if candidate.startswith('[') and not candidate.endswith(']'):
+                last_brace = candidate.rfind('}')
+                if last_brace != -1:
+                    candidate = candidate[:last_brace+1] + ']'
+                else:
+                    candidate += "]"
             
-            processed_raw = json_match.group()
+            # Manuel format düzeltmesi: "o":"A","B" -> "o":["A","B"]
+            candidate = re.sub(r'"o"\s*:\s*([^\[].*?)\s*,\s*"a"\s*:', r'"o": [\1], "a":', candidate, flags=re.DOTALL)
             
-            # Kritik Hata Düzeltme: "o":"A","B" -> "o":["A","B"]
-            # 'o'dan sonra [ gelmiyorsa, bir sonraki anahtar olan 'a'ya kadar olan kısmı köşeli paranteze al.
-            processed_raw = re.sub(r'"o"\s*:\s*([^\[].*?)\s*,\s*"a"\s*:', r'"o": [\1], "a":', processed_raw, flags=re.DOTALL)
-            
-            # Başarılı parse sonrası mesajı sil (önce silme ki hata olursa kullanıcıyı bilgilendir)
-            quiz_data = json.loads(processed_raw)
-            
+            try:
+                data = json.loads(candidate)
+                return data if isinstance(data, list) else [data]
+            except:
+                # Trailing comma temizliği dene
+                candidate = candidate.replace("},]", "}]").replace("}, ]", "}]")
+                try: return json.loads(candidate)
+                except: return None
+
+        quiz_data = extract_json(raw)
+        if not quiz_data:
+            logging.error(f"Quiz Parse Error: JSON listesi bulunamadı\nRaw Response: {raw[:500]}")
+            await msg.edit_text("⚠️ Soru formatı çözülemedi. Lütfen tekrar deneyin.")
+            return
+
+        try:
             for i, item in enumerate(quiz_data):
+                if not isinstance(item, dict): continue
+                
                 # Seçeneklerin liste olduğunu doğrula ve her birini string'e çevir
                 raw_options = item.get('o', [])
                 if isinstance(raw_options, str):
@@ -277,12 +302,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     continue
                 
                 # Correct option id sınır kontrolü
-                cor_id = int(item.get('a', 0))
+                try: cor_id = int(item.get('a', 0))
+                except: cor_id = 0
                 if cor_id >= len(options): cor_id = 0
                 
                 p = await context.bot.send_poll(
                     chat_id=query.message.chat_id, 
-                    question=f"{i+1}. {item['q']}", 
+                    question=f"{i+1}. {item.get('q', 'Soru')}", 
                     options=options[:5], 
                     type='quiz', 
                     correct_option_id=cor_id,
@@ -291,21 +317,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 POLL_TO_USER[p.poll.id] = {
                     "user_id": query.from_user.id, 
-                    "correct_id": int(item['a']), 
-                    "subject": item['s'], 
+                    "correct_id": cor_id, 
+                    "subject": item.get('s', 'Genel'), 
                     "cat": item.get('cat', ders)
                 }
                 await asyncio.sleep(0.5)
             
-            # Tüm sorular başarıyla gönderildiyse "üretiliyor" mesajını sil
             try: await msg.delete()
             except: pass
         except Exception as e:
-            logging.error(f"Quiz Parse Error: {e}\nRaw Response: {raw[:500]}")
-            try:
-                await msg.edit_text(f"⚠️ Hata: {str(e)[:50]}... Lütfen tekrar deneyin.")
-            except:
-                await context.bot.send_message(chat_id=query.message.chat_id, text="⚠️ Soru üretiminde bir sorun oluştu.")
+            logging.error(f"Quiz Sending Error: {e}")
+            await context.bot.send_message(chat_id=query.message.chat_id, text="⚠️ Soru gönderiminde bir sorun oluştu.")
 
     elif query.data.startswith("exp_"):
         parts = query.data.split("|")
