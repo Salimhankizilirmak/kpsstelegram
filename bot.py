@@ -126,7 +126,11 @@ async def openrouter_call(prompt, mode="info"):
     instruction = AI_INSTRUCTIONS.get(mode, mode)
     
     for model_id in ACTIVE_FREE_MODELS:
-        payload = {"model": model_id, "messages": [{"role": "user", "content": f"TALİMAT: {instruction}\nİSTEK: {prompt}"}]}
+        payload = {
+            "model": model_id, 
+            "messages": [{"role": "user", "content": f"TALİMAT: {instruction}\nİSTEK: {prompt}"}],
+            "max_tokens": 4000
+        }
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(url, headers=headers, json=payload, timeout=60.0)
@@ -145,9 +149,12 @@ async def openrouter_call(prompt, mode="info"):
 async def hybrid_engine(prompt, mode="info"):
     instruction = AI_INSTRUCTIONS.get(mode, mode)
     try:
-        print(f"🚀 AI Denemesi: {mode} | Gemini-1.5-Flash")
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = await model.generate_content_async(f"TALİMAT: {instruction}\nİSTEK: {prompt}")
+        print(f"🚀 AI Denemesi: {mode} | Gemini-2.0-Flash")
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        response = await model.generate_content_async(
+            f"TALİMAT: {instruction}\nİSTEK: {prompt}",
+            generation_config={"max_output_tokens": 4000}
+        )
         if response and response.text:
             print("✅ Gemini Başarılı.")
             return response.text.strip()
@@ -236,6 +243,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             # JSON temizleme ve iyileştirme
             raw_clean = raw.replace("```json", "").replace("```", "").strip()
+            
+            # Kesilme onarımı: Eğer JSON liste kapanmamışsa, son tam objeden sonra kapat
+            if raw_clean.startswith('[') and not raw_clean.endswith(']'):
+                last_brace = raw_clean.rfind('}')
+                if last_brace != -1:
+                    raw_clean = raw_clean[:last_brace+1] + ']'
+                    logging.info("⚠️ JSON kesilmiş bulundu, onarıldı.")
+
             json_match = re.search(r'\[.*\]', raw_clean, re.DOTALL)
             if not json_match:
                 raise ValueError("JSON listesi ([...]) bulunamadı")
@@ -246,33 +261,44 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 'o'dan sonra [ gelmiyorsa, bir sonraki anahtar olan 'a'ya kadar olan kısmı köşeli paranteze al.
             processed_raw = re.sub(r'"o"\s*:\s*([^\[].*?)\s*,\s*"a"\s*:', r'"o": [\1], "a":', processed_raw, flags=re.DOTALL)
             
+            # Başarılı parse sonrası mesajı sil (önce silme ki hata olursa kullanıcıyı bilgilendir)
             quiz_data = json.loads(processed_raw)
-            await msg.delete()
+            
             for i, item in enumerate(quiz_data):
-                # Seçeneklerin liste olduğunu doğrula
-                options = item.get('o', [])
-                if isinstance(options, str):
-                    options = [opt.strip() for opt in options.split(',')]
+                # Seçeneklerin liste olduğunu doğrula ve her birini string'e çevir
+                raw_options = item.get('o', [])
+                if isinstance(raw_options, str):
+                    raw_options = [opt.strip() for opt in raw_options.split(',')]
+                
+                # Kritik: Seçeneklerin string olduğundan emin ol (Örn: AI 1923 (sayı) dönerse hata verir)
+                options = [str(opt) for opt in raw_options]
                 
                 p = await context.bot.send_poll(
                     chat_id=query.message.chat_id, 
                     question=f"{i+1}. {item['q']}", 
-                    options=options[:5], # En fazla 5 seçenek
+                    options=options[:5], 
                     type='quiz', 
-                    correct_option_id=item['a'], 
+                    correct_option_id=int(item['a']), # Integer olduğundan emin ol
                     is_anonymous=False, 
-                    explanation=item['e'][:200]
+                    explanation=str(item['e'])[:200]
                 )
                 POLL_TO_USER[p.poll.id] = {
                     "user_id": query.from_user.id, 
-                    "correct_id": item['a'], 
+                    "correct_id": int(item['a']), 
                     "subject": item['s'], 
                     "cat": item.get('cat', ders)
                 }
                 await asyncio.sleep(0.5)
+            
+            # Tüm sorular başarıyla gönderildiyse "üretiliyor" mesajını sil
+            try: await msg.delete()
+            except: pass
         except Exception as e:
             logging.error(f"Quiz Parse Error: {e}\nRaw Response: {raw[:500]}")
-            await msg.edit_text("⚠️ Soru formatında bir hata oluştu, lütfen tekrar deneyin.")
+            try:
+                await msg.edit_text(f"⚠️ Hata: {str(e)[:50]}... Lütfen tekrar deneyin.")
+            except:
+                await context.bot.send_message(chat_id=query.message.chat_id, text="⚠️ Soru üretiminde bir sorun oluştu.")
 
     elif query.data.startswith("exp_"):
         parts = query.data.split("|")
