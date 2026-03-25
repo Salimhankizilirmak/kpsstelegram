@@ -4,6 +4,9 @@ import logging
 import asyncio
 import re
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv() # .env dosyasını yükle
 from google import genai
 from telegram import Update, Poll, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -15,9 +18,9 @@ import pytz
 from gtts import gTTS
 
 # --- 1. YAPILANDIRMA ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDf0vPfi6ncOytWDjzgwPe3FIJQJffcA4I")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "7916950620:AAGslKN9hCyJnaMF7QbrijyjDgzkQ1XsNVw")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATA_FILE = "kpss_2026_data.json"
 SINAV_TARIHI = datetime(2026, 7, 19, 10, 0, 0, tzinfo=pytz.timezone("Europe/Istanbul"))
 
@@ -96,7 +99,11 @@ async def openrouter_call(prompt, mode="info"):
                 resp = await client.post(url, headers=headers, json=payload, timeout=60.0)
                 if resp.status_code == 200:
                     return resp.json()['choices'][0]['message']['content'].strip()
-        except: continue
+                else:
+                    logging.error(f"OpenRouter Error ({model_id}): {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logging.error(f"OpenRouter Exception ({model_id}): {e}")
+            continue
     return None
 
 async def hybrid_engine(prompt, mode="info"):
@@ -105,8 +112,12 @@ async def hybrid_engine(prompt, mode="info"):
         response = await loop.run_in_executor(None, lambda: client_gemini.models.generate_content(
             model="gemini-1.5-flash", contents=f"TALİMAT: {mode}\nİSTEK: {prompt}"
         ))
-        return response.text.strip()
-    except:
+        if response and response.text:
+            return response.text.strip()
+        else:
+            raise Exception("Empty Gemini response")
+    except Exception as e:
+        logging.error(f"Gemini Engine Error: {e}")
         return await openrouter_call(prompt, mode)
 
 # --- 6. ONBOARDING (AWAIT HATASI ÇÖZÜLDÜ) ---
@@ -181,14 +192,37 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ders = query.data.split("_")[1]
         msg = await query.edit_message_text(f"⏳ **{ders}** için kaliteli sorular üretiliyor...")
         raw = await hybrid_engine(ders, mode="quiz")
+        if not raw:
+            await msg.edit_text("❌ AI şu an çok yoğun. Lütfen 30 saniye sonra tekrar deneyin.")
+            return
+
         try:
-            quiz_data = json.loads(re.search(r'\[.*\]', raw, re.DOTALL).group())
+            json_match = re.search(r'\[.*\]', raw, re.DOTALL)
+            if not json_match:
+                raise ValueError("JSON formatı bulunamadı")
+            
+            quiz_data = json.loads(json_match.group())
             await msg.delete()
             for i, item in enumerate(quiz_data):
-                p = await context.bot.send_poll(chat_id=query.message.chat_id, question=f"{i+1}. {item['q']}", options=item['o'], type='quiz', correct_option_id=item['a'], is_anonymous=False, explanation=item['e'][:200])
-                POLL_TO_USER[p.poll.id] = {"user_id": query.from_user.id, "correct_id": item['a'], "subject": item['s'], "cat": item.get('cat', ders)}
+                p = await context.bot.send_poll(
+                    chat_id=query.message.chat_id, 
+                    question=f"{i+1}. {item['q']}", 
+                    options=item['o'], 
+                    type='quiz', 
+                    correct_option_id=item['a'], 
+                    is_anonymous=False, 
+                    explanation=item['e'][:200]
+                )
+                POLL_TO_USER[p.poll.id] = {
+                    "user_id": query.from_user.id, 
+                    "correct_id": item['a'], 
+                    "subject": item['s'], 
+                    "cat": item.get('cat', ders)
+                }
                 await asyncio.sleep(0.5)
-        except: await msg.edit_text("AI yoğun, lütfen tekrar deneyin.")
+        except Exception as e:
+            logging.error(f"Quiz Parse Error: {e}\nRaw Response: {raw[:500]}")
+            await msg.edit_text("⚠️ Soru formatında bir hata oluştu, lütfen tekrar deneyin.")
 
     elif query.data.startswith("exp_"):
         parts = query.data.split("|")
@@ -233,6 +267,33 @@ async def cevap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btns = [[InlineKeyboardButton(f"🎙 {f.split('|')[0][:25]}", callback_data=f"exp_|{f}"[:64])] for f in hatali_list]
     await update.message.reply_text(f"Skor: {s['dogru']}D {s['yanlis']}Y.\nEksik Konularının Analizi:", reply_markup=InlineKeyboardMarkup(btns) if btns else None)
 
+async def durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    data = await veri_yukle()
+    
+    if user_id not in data:
+        await update.message.reply_text("Henüz kaydın bulunmuyor. Başlamak için /start komutunu kullanabilirsin.")
+        return
+
+    u = data[user_id]
+    stats = u.get("stats", {"dogru": 0, "yanlis": 0, "hatali_konular": []})
+    dogru = stats.get("dogru", 0)
+    yanlis = stats.get("yanlis", 0)
+    toplam = dogru + yanlis
+    net = dogru - (yanlis * 0.25)
+    
+    baslik = f"📊 **GÜNCEL DURUM: {u.get('ad', 'Öğrenci')}**\n\n"
+    icerik = (
+        f"✅ Doğru: {dogru}\n"
+        f"❌ Yanlış: {yanlis}\n"
+        f"📉 Toplam Net: {net:.2f}\n"
+        f"📚 Çözülen Soru: {toplam}\n\n"
+        f"🗺 **KİŞİSEL YOL HARİTAN:**\n"
+    )
+    
+    await update.message.reply_text(baslik + icerik)
+    await mesaj_parcali_gonder(update, context, u.get("roadmap", "Henüz yol haritası oluşturulmamış."))
+
 # --- 8. MAIN ---
 import keep_alive
 
@@ -256,6 +317,7 @@ def main():
     app.add_handler(conv)
     app.add_handler(CommandHandler("quiz", quiz_menu))
     app.add_handler(CommandHandler("cevap", cevap))
+    app.add_handler(CommandHandler("durum", durum))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(PollAnswerHandler(poll_handler))
     
