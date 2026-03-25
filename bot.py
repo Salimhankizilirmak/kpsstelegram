@@ -36,7 +36,16 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 
 # --- 2. DURUMLAR VE HAFIZA ---
 SINAV, BRANS, HEDEF, NET, ZAYIF, SAAT = range(6)
-ACTIVE_FREE_MODELS = ["google/gemini-2.0-flash-exp:free", "google/gemini-flash-1.5-8b:free", "meta-llama/llama-3.1-8b-instruct:free"]
+ACTIVE_FREE_MODELS = [
+    "google/gemini-2.0-flash-exp:free", 
+    "google/gemini-flash-1.5-8b:free", 
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "mistralai/pixtral-12b:free",
+    "google/gemma-2-9b-it:free",
+    "qwen/qwen-2-7b-instruct:free",
+    "microsoft/phi-3-medium-128k-instruct:free"
+]
 POLL_TO_USER = {} 
 data_lock = asyncio.Lock()
 
@@ -339,6 +348,43 @@ async def deneme(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Lütfen sayısal değerler girin (Örn: 40 35).")
 
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔍 **Sistem Teşhis Modu Başlatıldı...**", parse_mode='Markdown')
+    env_status = (
+        f"✅ Gemini Key: {'Yüklü' if GEMINI_API_KEY else '❌ EKSİK'}\n"
+        f"✅ OpenRouter Key: {'Yüklü' if OPENROUTER_API_KEY else '❌ EKSİK'}\n"
+        f"✅ Telegram Token: {'Yüklü' if TELEGRAM_TOKEN else '❌ EKSİK'}\n"
+    )
+    await msg.edit_text(f"🔍 **Sistem Teşhis Modu**\n\n**Ortam Değişkenleri:**\n{env_status}", parse_mode='Markdown')
+    
+    # Test Gemini
+    try:
+        loop = asyncio.get_event_loop()
+        test_gemini = await loop.run_in_executor(None, lambda: client_gemini.models.generate_content(
+            model="gemini-1.5-flash", contents="Hi, just say 'Gemini OK'"
+        ))
+        gemini_res = f"✅ Gemini: {test_gemini.text.strip()}"
+    except Exception as e:
+        gemini_res = f"❌ Gemini Hatası: {str(e)[:100]}"
+    
+    # Test OpenRouter
+    await msg.edit_text(f"🔍 **Sistem Teşhis Modu**\n\n**Ortam Değişkenleri:**\n{env_status}\n{gemini_res}\n⏳ OpenRouter test ediliyor...", parse_mode='Markdown')
+    try:
+        test_or = await openrouter_call("Hi, just say 'OR OK'", mode="info")
+        or_res = f"✅ OpenRouter: {test_or if test_or else 'Dönüş Yok'}"
+    except Exception as e:
+        or_res = f"❌ OpenRouter Hatası: {str(e)[:100]}"
+    
+    final_text = (
+        f"🔍 **Sistem Teşhis Sonuçları**\n\n"
+        f"**Ortam Değişkenleri:**\n{env_status}\n"
+        f"**Bağlantı Testleri:**\n"
+        f"{gemini_res}\n"
+        f"{or_res}\n\n"
+        f"💡 *Not:* Eğer anahtarlar 'EKSİK' görünüyorsa Render Dashboard üzerinden eklemelisin."
+    )
+    await msg.edit_text(final_text, parse_mode='Markdown')
+
 # --- 8. MAIN ---
 import keep_alive
 
@@ -364,6 +410,7 @@ def main():
     app.add_handler(CommandHandler("cevap", cevap))
     app.add_handler(CommandHandler("durum", durum))
     app.add_handler(CommandHandler("deneme", deneme))
+    app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(PollAnswerHandler(poll_handler))
     
