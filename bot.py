@@ -7,7 +7,7 @@ import httpx
 from dotenv import load_dotenv
 
 load_dotenv() # .env dosyasını yükle
-from google import genai
+import google.generativeai as genai
 from telegram import Update, Poll, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, 
@@ -18,9 +18,9 @@ import pytz
 from gtts import gTTS
 
 # --- 1. YAPILANDIRMA ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 DATA_FILE = "kpss_2026_data.json"
 SINAV_TARIHI = datetime(2026, 7, 19, 10, 0, 0, tzinfo=pytz.timezone("Europe/Istanbul"))
 
@@ -31,7 +31,8 @@ if not all([GEMINI_API_KEY, OPENROUTER_API_KEY, TELEGRAM_TOKEN]):
     if not TELEGRAM_TOKEN:
         print("Kritik Hata: TELEGRAM_TOKEN bulunamadı. Bot başlatılamıyor.")
 
-client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+if TELEGRAM_TOKEN:
+    genai.configure(api_key=GEMINI_API_KEY)
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, force=True)
 
 def mask_key(key): return f"{key[:6]}...{key[-4:]}" if key else "EKSİK"
@@ -126,6 +127,7 @@ async def openrouter_call(prompt, mode="info"):
                     return content
                 else:
                     print(f"❌ OpenRouter Hata ({model_id}): {resp.status_code}")
+                    print(f"📄 Yanıt: {resp.text[:200]}")
                     logging.error(f"OpenRouter Error ({model_id}): {resp.status_code} - {resp.text}")
         except Exception as e:
             logging.error(f"OpenRouter Exception ({model_id}): {e}")
@@ -135,10 +137,8 @@ async def openrouter_call(prompt, mode="info"):
 async def hybrid_engine(prompt, mode="info"):
     try:
         print(f"🚀 AI Denemesi: {mode} | Gemini-1.5-Flash")
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, lambda: client_gemini.models.generate_content(
-            model="gemini-1.5-flash", contents=f"TALİMAT: {mode}\nİSTEK: {prompt}"
-        ))
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = await model.generate_content_async(f"TALİMAT: {mode}\nİSTEK: {prompt}")
         if response and response.text:
             print("✅ Gemini Başarılı.")
             return response.text.strip()
