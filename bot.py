@@ -87,8 +87,8 @@ async def model_kesfi():
 AI_INSTRUCTIONS = {
     "info": "Kısa KPSS hap bilgisi. Bilgi ölçücü ve net.",
     "quiz": (
-        "SEN BİR ÖSYM SORU YAZARISIN. Çeldiricileri çok güçlü, muhakeme gerektiren 10 adet soru hazırla. "
-        "SADECE JSON dön. Dili Türkçe olsun. JSON formatı dışına çıkma. "
+        "SEN BİR ÖSYM SORU YAZARISIN. Çeldiricileri çok güçlü, muhakeme gerektiren 5 adet soru hazırla. "
+        "SADECE JSON dön. DİL TAMAMEN TÜRKÇE OLSUN. Başka dilden kelime kullanma. JSON formatı dışına çıkma. "
         "ÖNEMLİ: 'o' anahtarı MUTLAKA bir liste (Array) olmalı (['A', 'B', 'C']). "
         "Format: [{\"q\": \"Soru Metni\", \"o\": [\"Cevap A\", \"Cevap B\", \"Cevap C\", \"Cevap D\", \"Cevap E\"], "
         "\"a\": 0, \"s\": \"Konu\", \"e\": \"Çözüm Açıklaması\", \"cat\": \"Ders\"}]"
@@ -270,17 +270,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if isinstance(raw_options, str):
                     raw_options = [opt.strip() for opt in raw_options.split(',')]
                 
-                # Kritik: Seçeneklerin string olduğundan emin ol (Örn: AI 1923 (sayı) dönerse hata verir)
+                # Seçeneklerin string olduğundan emin ol ve en az 2 seçenek olduğunu kontrol et
                 options = [str(opt) for opt in raw_options]
+                if len(options) < 2:
+                    logging.warning(f"Soru {i+1} yetersiz seçenek nedeniyle atlandı.")
+                    continue
+                
+                # Correct option id sınır kontrolü
+                cor_id = int(item.get('a', 0))
+                if cor_id >= len(options): cor_id = 0
                 
                 p = await context.bot.send_poll(
                     chat_id=query.message.chat_id, 
                     question=f"{i+1}. {item['q']}", 
                     options=options[:5], 
                     type='quiz', 
-                    correct_option_id=int(item['a']), # Integer olduğundan emin ol
+                    correct_option_id=cor_id,
                     is_anonymous=False, 
-                    explanation=str(item['e'])[:200]
+                    explanation=str(item.get('e', ''))[:200]
                 )
                 POLL_TO_USER[p.poll.id] = {
                     "user_id": query.from_user.id, 
