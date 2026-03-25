@@ -24,6 +24,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DATA_FILE = "kpss_2026_data.json"
 SINAV_TARIHI = datetime(2026, 7, 19, 10, 0, 0, tzinfo=pytz.timezone("Europe/Istanbul"))
 
+# Startup Check
+if not all([GEMINI_API_KEY, OPENROUTER_API_KEY, TELEGRAM_TOKEN]):
+    print("❌ HATA: API Anahtarları Eksik!")
+    logging.error("❌ HATA: GEMINI_API_KEY, OPENROUTER_API_KEY or TELEGRAM_TOKEN not found in environment!")
+    if not TELEGRAM_TOKEN:
+        print("Kritik Hata: TELEGRAM_TOKEN bulunamadı. Bot başlatılamıyor.")
+
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
