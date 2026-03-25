@@ -32,7 +32,8 @@ if not all([GEMINI_API_KEY, OPENROUTER_API_KEY, TELEGRAM_TOKEN]):
         print("Kritik Hata: TELEGRAM_TOKEN bulunamadı. Bot başlatılamıyor.")
 
 client_gemini = genai.Client(api_key=GEMINI_API_KEY)
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, force=True)
+print(f"✅ Bot Başlatıldı. Gemini: {bool(GEMINI_API_KEY)}, OpenRouter: {bool(OPENROUTER_API_KEY)}")
 
 # --- 2. DURUMLAR VE HAFIZA ---
 SINAV, BRANS, HEDEF, NET, ZAYIF, SAAT = range(6)
@@ -74,8 +75,8 @@ async def model_kesfi():
                 discovered = [m['id'] for m in data if ':free' in m['id']]
                 if discovered: ACTIVE_FREE_MODELS = discovered
     except Exception as e:
-        logging.error(f"❌ Model keşfi hatası: {e}")
-    logging.info(f"✅ Aktif ücretsiz modeller: {ACTIVE_FREE_MODELS}")
+        print(f"❌ Model keşfi hatası: {e}")
+    print(f"✅ Aktif ücretsiz modeller: {len(ACTIVE_FREE_MODELS)} adet bulundu.")
 
 # --- 4. VERİ VE MESAJ YÖNETİMİ ---
 async def veri_yukle():
@@ -117,9 +118,10 @@ async def openrouter_call(prompt, mode="info"):
                 resp = await client.post(url, headers=headers, json=payload, timeout=60.0)
                 if resp.status_code == 200:
                     content = resp.json()['choices'][0]['message']['content'].strip()
-                    logging.info(f"✅ OpenRouter ({model_id}) Başarılı")
+                    print(f"✅ OpenRouter ({model_id}) Başarılı")
                     return content
                 else:
+                    print(f"❌ OpenRouter Hata ({model_id}): {resp.status_code}")
                     logging.error(f"OpenRouter Error ({model_id}): {resp.status_code} - {resp.text}")
         except Exception as e:
             logging.error(f"OpenRouter Exception ({model_id}): {e}")
@@ -128,18 +130,18 @@ async def openrouter_call(prompt, mode="info"):
 
 async def hybrid_engine(prompt, mode="info"):
     try:
-        logging.info(f"🚀 Gemini denemesi başlatılıyor (Mod: {mode})...")
+        print(f"🚀 AI Denemesi: {mode} | Gemini-1.5-Flash")
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, lambda: client_gemini.models.generate_content(
             model="gemini-1.5-flash", contents=f"TALİMAT: {mode}\nİSTEK: {prompt}"
         ))
         if response and response.text:
-            logging.info("✅ Gemini başarılı.")
+            print("✅ Gemini Başarılı.")
             return response.text.strip()
         else:
-            raise Exception("Boş Gemini yanıtı")
+            raise Exception("Gemini boş döndü.")
     except Exception as e:
-        logging.warning(f"⚠️ Gemini Hatası: {e}. OpenRouter deneniyor...")
+        print(f"⚠️ Gemini Başarısız: {e}. OpenRouter'a geçiliyor...")
         return await openrouter_call(prompt, mode)
 
 # --- 6. ONBOARDING (AWAIT HATASI ÇÖZÜLDÜ) ---
@@ -422,7 +424,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(PollAnswerHandler(poll_handler))
     
-    print("--- KPSS BOT V31.0 NİHAİ AKTİF ---")
+    print("--- KPSS BOT V31.0 NİHAİ AKTİF (POLLING) ---")
     app.run_polling()
 
 if __name__ == '__main__': main()
