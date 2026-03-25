@@ -294,6 +294,44 @@ async def durum(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(baslik + icerik)
     await mesaj_parcali_gonder(update, context, u.get("roadmap", "Henüz yol haritası oluşturulmamış."))
 
+async def deneme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text("Lütfen doğru ve yanlış sayısını belirtin.\nÖrnek: `/deneme 40 35`", parse_mode='Markdown')
+        return
+
+    try:
+        dogru = float(args[0])
+        yanlis = float(args[1])
+        net = dogru - (yanlis * 0.25)
+        
+        data = await veri_yukle()
+        if user_id not in data:
+            data[user_id] = {
+                "ad": update.effective_user.first_name, 
+                "stats": {"dogru": 0, "yanlis": 0, "hatali_konular": []}, 
+                "egitim": {}, 
+                "denemeler": []
+            }
+        
+        entry = {
+            "tarih": datetime.now(pytz.timezone("Europe/Istanbul")).strftime("%d.%m.%Y %H:%M"),
+            "dogru": dogru,
+            "yanlis": yanlis,
+            "net": net
+        }
+        data[user_id].setdefault("denemeler", []).append(entry)
+        await veri_kaydet(data)
+        
+        await update.message.reply_text(
+            f"✅ **Deneme Kaydedildi!**\n\n📈 Net: **{net:.2f}**\n📅 Tarih: {entry['tarih']}\n\nBaşarılar dilerim, çalışmaya devam! 🔥", 
+            parse_mode='Markdown'
+        )
+    except ValueError:
+        await update.message.reply_text("Lütfen sayısal değerler girin (Örn: 40 35).")
+
 # --- 8. MAIN ---
 import keep_alive
 
@@ -318,6 +356,7 @@ def main():
     app.add_handler(CommandHandler("quiz", quiz_menu))
     app.add_handler(CommandHandler("cevap", cevap))
     app.add_handler(CommandHandler("durum", durum))
+    app.add_handler(CommandHandler("deneme", deneme))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(PollAnswerHandler(poll_handler))
     
