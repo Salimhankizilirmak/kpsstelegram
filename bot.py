@@ -84,6 +84,19 @@ async def model_kesfi():
     print(f"✅ Aktif ücretsiz modeller: {len(ACTIVE_FREE_MODELS)} adet bulundu.")
 
 # --- 4. VERİ VE MESAJ YÖNETİMİ ---
+AI_INSTRUCTIONS = {
+    "info": "Kısa KPSS hap bilgisi. Bilgi ölçücü ve net.",
+    "quiz": (
+        "SEN BİR ÖSYM SORU YAZARISIN. Çeldiricileri çok güçlü, muhakeme gerektiren 10 adet soru hazırla. "
+        "SADECE JSON dön. Dili Türkçe olsun. JSON formatı dışına çıkma. "
+        "ÖNEMLİ: 'o' anahtarı MUTLAKA bir liste (Array) olmalı (['A', 'B', 'C']). "
+        "Format: [{\"q\": \"Soru Metni\", \"o\": [\"Cevap A\", \"Cevap B\", \"Cevap C\", \"Cevap D\", \"Cevap E\"], "
+        "\"a\": 0, \"s\": \"Konu\", \"e\": \"Çözüm Açıklaması\", \"cat\": \"Ders\"}]"
+    ),
+    "roadmap": "93 puan hedefli, mühendislik disiplinine uygun analitik strateji. Mühendislik terminolojisi kullan.",
+    "lesson": "Konuyu ÖSYM can alıcı noktaları üzerinden derinlemesine anlat."
+}
+
 async def veri_yukle():
     async with data_lock:
         if not os.path.exists(DATA_FILE): return {}
@@ -110,14 +123,10 @@ async def mesaj_parcali_gonder(update, context, text):
 async def openrouter_call(prompt, mode="info"):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "HTTP-Referer": "https://kpsskoc.com", "X-Title": "KPSS Master"}
-    instruct = {
-        "info": "Kısa KPSS hap bilgisi. Bilgi ölçücü ve net.",
-        "quiz": "SEN BİR ÖSYM SORU YAZARISIN. Çeldiricileri çok güçlü, muhakeme gerektiren 25 soru hazırla. SADECE JSON dön. Format: [{\"q\": \"s\", \"o\": [\"A\",\"B\",\"C\",\"D\",\"E\"], \"a\": 0, \"s\": \"Konu\", \"e\": \"Çözüm\", \"cat\": \"Ders\"}]",
-        "roadmap": "93 puan hedefli, mühendislik disiplinine uygun analitik strateji.",
-        "lesson": "Konuyu ÖSYM can alıcı noktaları üzerinden derinlemesine anlat."
-    }
+    instruction = AI_INSTRUCTIONS.get(mode, mode)
+    
     for model_id in ACTIVE_FREE_MODELS:
-        payload = {"model": model_id, "messages": [{"role": "user", "content": f"ROL: {instruct.get(mode, mode)}\nİSTEK: {prompt}"}]}
+        payload = {"model": model_id, "messages": [{"role": "user", "content": f"TALİMAT: {instruction}\nİSTEK: {prompt}"}]}
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(url, headers=headers, json=payload, timeout=60.0)
@@ -127,7 +136,6 @@ async def openrouter_call(prompt, mode="info"):
                     return content
                 else:
                     print(f"❌ OpenRouter Hata ({model_id}): {resp.status_code}")
-                    print(f"📄 Yanıt: {resp.text[:200]}")
                     logging.error(f"OpenRouter Error ({model_id}): {resp.status_code} - {resp.text}")
         except Exception as e:
             logging.error(f"OpenRouter Exception ({model_id}): {e}")
@@ -135,10 +143,11 @@ async def openrouter_call(prompt, mode="info"):
     return None
 
 async def hybrid_engine(prompt, mode="info"):
+    instruction = AI_INSTRUCTIONS.get(mode, mode)
     try:
         print(f"🚀 AI Denemesi: {mode} | Gemini-1.5-Flash")
         model = genai.GenerativeModel('gemini-1.5-flash')
-        response = await model.generate_content_async(f"TALİMAT: {mode}\nİSTEK: {prompt}")
+        response = await model.generate_content_async(f"TALİMAT: {instruction}\nİSTEK: {prompt}")
         if response and response.text:
             print("✅ Gemini Başarılı.")
             return response.text.strip()
@@ -225,17 +234,30 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
-            json_match = re.search(r'\[.*\]', raw, re.DOTALL)
+            # JSON temizleme ve iyileştirme
+            raw_clean = raw.replace("```json", "").replace("```", "").strip()
+            json_match = re.search(r'\[.*\]', raw_clean, re.DOTALL)
             if not json_match:
-                raise ValueError("JSON formatı bulunamadı")
+                raise ValueError("JSON listesi ([...]) bulunamadı")
             
-            quiz_data = json.loads(json_match.group())
+            processed_raw = json_match.group()
+            
+            # Kritik Hata Düzeltme: "o":"A","B" -> "o":["A","B"]
+            # 'o'dan sonra [ gelmiyorsa, bir sonraki anahtar olan 'a'ya kadar olan kısmı köşeli paranteze al.
+            processed_raw = re.sub(r'"o"\s*:\s*([^\[].*?)\s*,\s*"a"\s*:', r'"o": [\1], "a":', processed_raw, flags=re.DOTALL)
+            
+            quiz_data = json.loads(processed_raw)
             await msg.delete()
             for i, item in enumerate(quiz_data):
+                # Seçeneklerin liste olduğunu doğrula
+                options = item.get('o', [])
+                if isinstance(options, str):
+                    options = [opt.strip() for opt in options.split(',')]
+                
                 p = await context.bot.send_poll(
                     chat_id=query.message.chat_id, 
                     question=f"{i+1}. {item['q']}", 
-                    options=item['o'], 
+                    options=options[:5], # En fazla 5 seçenek
                     type='quiz', 
                     correct_option_id=item['a'], 
                     is_anonymous=False, 
